@@ -1,0 +1,828 @@
+loadstring(game:HttpGet(("https://pastebin.com/raw/nkNzyA7G")))()
+
+MakeWindow({
+  Hub = {
+    Title = "Helix Hub",
+    Animation = "by : Bloodai"
+  },
+  Key = {
+    KeySystem = false,
+    Title = "Key System",
+    Description = "",
+    KeyLink = "",
+    Keys = {"1234"},
+    Notifi = {
+      Notifications = true,
+      CorrectKey = "Running the Script...",
+      Incorrectkey = "The key is incorrect",
+      CopyKeyLink = "Copied to Clipboard"
+    }
+  }
+})
+
+MinimizeButton({
+  Image = "rbxassetid://85219327131493",
+  Size = {40, 40},
+  Color = Color3.fromRGB(10, 10, 10),
+  Corner = true,
+  Stroke = true,
+  StrokeColor = Color3.fromRGB(255, 0, 0)
+})
+
+local Main = MakeTab({Name = "Main"})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local CurrentCamera = workspace.CurrentCamera
+
+-- ===== CONFIG =====
+local SPEED = 350
+local HIT_DISTANCE = 18
+local FRONT_OFFSET = 13
+local TOOL_NAME = "Kitsune-Kitsune"
+
+-- ===== VIDA / FUGA =====
+local FLEE_HP_PERCENT = 45
+local RETURN_HP_PERCENT = 55
+local FLEE_HEIGHT = 5000
+local MIN_SAFE_DIST = 6
+local fleeBaseY = nil
+
+-- ===== FAST M1 =====
+local CLICK_DELAY = 0.05
+local Combos = {1, 2}
+local comboIndex = 1
+local lastClick = 0
+
+-- ===== STATE =====
+local FollowEnabled = false
+local IsLoopRunning = false
+local STATE = "ATTACK" -- ATTACK | FLEE
+
+-- ===== TARGET =====
+getgenv().PlayerSelecionado = nil
+
+-- ===== CHAR UTILS =====
+local function char()
+    return LocalPlayer.Character
+end
+
+local function hrp()
+    local c = char()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function humanoid()
+    local c = char()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+-- ===== AUTO EQUIP TOOL =====
+local function autoEquip()
+    local c = char()
+    if not c then return end
+
+    if c:FindFirstChild(TOOL_NAME) then return end
+
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if not bp then return end
+
+    local tool = bp:FindFirstChild(TOOL_NAME)
+    if tool then
+        tool.Parent = c
+    end
+end
+
+-- ===== HP % =====
+local function getHPPercent()
+    local hum = humanoid()
+    if not hum then return 100 end
+    return (hum.Health / hum.MaxHealth) * 100
+end
+
+-- ===== GET SELECTED PLAYER HRP =====
+local function getSelectedPlayerHRP()
+    if not getgenv().PlayerSelecionado then return end
+
+    local plr = Players:FindFirstChild(getgenv().PlayerSelecionado)
+    if not plr or not plr.Character then return end
+
+    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+    local hr = plr.Character:FindFirstChild("HumanoidRootPart")
+    if hum and hr and hum.Health > 0 then
+        return hr
+    end
+end
+
+-- ===== FAST M1 =====
+local function FastM1Blade(target)
+    if tick() - lastClick < CLICK_DELAY then return end
+
+    local c, h = char(), hrp()
+    if not c or not h or not target then return end
+
+    local tool = c:FindFirstChild(TOOL_NAME)
+    if not tool then autoEquip() return end
+
+    local remote = tool:FindFirstChild("LeftClickRemote")
+    if not remote then return end
+
+    -- Em vez de forçar o CFrame aqui e bugar o movimento, 
+    -- apenas calculamos a direção para o Remote
+    local dir = (target.Position - h.Position).Unit
+    
+    -- O Remote precisa saber para onde você quer bater
+    remote:FireServer(dir, Combos[comboIndex])
+
+    comboIndex = comboIndex + 1
+    if comboIndex > #Combos then
+        comboIndex = 1
+    end
+    lastClick = tick()
+end
+
+-- ===== FLEE =====
+local function flee()
+    local h = hrp()
+    if not h then return end
+
+    -- salva a altura só UMA vez
+    if not fleeBaseY then
+        fleeBaseY = h.Position.Y
+    end
+
+    h.CFrame = CFrame.new(
+        h.Position.X,
+        fleeBaseY + FLEE_HEIGHT,
+        h.Position.Z
+    )
+end
+
+local function MoveToTarget(target)
+    if not target then return end
+    
+    local root = char():FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    -- Pega a direção pro target (horizontalmente, ignora altura se quiser)
+    local direction = (target.Position - root.Position)
+    -- direction = Vector3.new(direction.X, 0, direction.Z)   ← descomenta se quiser ignorar altura
+
+    if direction.Magnitude < 0.1 then return end   -- evita tremedeira quando tá muito perto
+
+    -- Cria o CFrame olhando pro target
+    local lookCFrame = CFrame.new(root.Position, root.Position + direction)
+
+    -- Aplica direto (bem suave e sem delay perceptível)
+    root.CFrame = lookCFrame
+end
+
+local function tpToTarget(target)
+    local h = hrp()
+    local hum = humanoid()
+    if not h or not hum or not target then return end
+
+    if h:FindFirstChild("MagnetAtt") then return end
+
+    local Attach = Instance.new("Attachment", h)
+    Attach.Name = "MagnetAtt"
+
+    hum.PlatformStand = true
+
+    local steppedConn = nil
+
+    task.spawn(function()
+        steppedConn = RunService.Stepped:Connect(function()
+            if not (FollowEnabled and target and target.Parent and h and h.Parent) then
+                steppedConn:Disconnect()
+                steppedConn = nil
+                StopAll()
+                return
+            end
+
+            -- Prediz onde o target vai estar no próximo frame
+            -- vel * 0.1 = quanto ele anda em ~6 frames (suficiente pra não atrasar)
+            local vel = target.AssemblyLinearVelocity
+            local predictedPos = target.Position + (vel * 0.1)
+
+            -- Cola na posição predita na frente dele
+            local pos = predictedPos + target.CFrame.LookVector * 2.5
+
+            h.CFrame = CFrame.new(pos, target.Position)
+            -- Empurra levemente em direção ao target todo frame
+            -- garante que o hitbox do M1 sempre toca mesmo que o player vire
+            h.AssemblyLinearVelocity = Vector3.zero
+            h.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end)
+end
+
+-- ===== STOP =====
+local function StopAll()
+    local h = hrp()
+    local hum = humanoid()
+    if not h or not hum then return end
+
+    hum.AutoRotate = true
+    hum.PlatformStand = false
+    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+
+    for _, v in ipairs(h:GetChildren()) do
+        if v:IsA("Attachment") or v:IsA("AlignOrientation") or v:IsA("LinearVelocity") then
+            if v.Name == "MagnetAtt" or v.Name == "MagnetAlign" or v.Name == "MagnetForce" then
+                v:Destroy()
+            end
+        end
+    end
+
+    -- Devolve o network pro servidor quando parar
+    pcall(function() h:SetNetworkOwner(nil) end)
+
+    h.AssemblyLinearVelocity = Vector3.new()
+    h.AssemblyAngularVelocity = Vector3.new()
+
+    print("[StopAll] Tudo limpo e normalizado! ✨")
+end
+
+-- ===== PLAYER DROPDOWN =====
+local function GetPlayerNames()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(list, p.Name)
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+local playerDropdown = AddDropdown(Main, {
+    Name = "Target Player",
+    Options = {},
+    Callback = function(v)
+        getgenv().PlayerSelecionado = v
+    end
+})
+
+local function UpdatePlayerDropdown()
+    UpdateDropdown(playerDropdown, GetPlayerNames())
+end
+
+Players.PlayerAdded:Connect(UpdatePlayerDropdown)
+Players.PlayerRemoving:Connect(UpdatePlayerDropdown)
+task.delay(0.5, UpdatePlayerDropdown)
+
+-- ===== MAIN LOOP =====
+local function Start()
+    if IsLoopRunning then return end
+    IsLoopRunning = true
+
+    task.spawn(function()
+        while FollowEnabled do
+            task.wait()
+
+            autoEquip()
+
+            local hp = getHPPercent()
+            local target = getSelectedPlayerHRP()
+
+            if hp <= FLEE_HP_PERCENT then
+                STATE = "FLEE"
+            elseif hp >= RETURN_HP_PERCENT then
+                STATE = "ATTACK"
+            end
+
+            if STATE == "FLEE" then
+                flee()
+            elseif STATE == "ATTACK" and target then
+               fleeBaseY = nil
+                tpToTarget(target)
+                MoveToTarget(target)
+                 FastM1Blade(target)
+                 FastM1Blade(target)
+                 FastM1Blade(target)
+                 FastM1Blade(target)
+                 FastM1Blade(target)
+            end
+
+            local c = char()
+            if c then
+                for _, p in ipairs(c:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CanCollide = false
+                    end
+                end
+            end
+        end
+
+        StopAll()
+        IsLoopRunning = false
+    end)
+end
+
+--// View Player
+
+local viewEnabled = false
+local currentTarget = nil
+local characterAddedConn = nil
+local lastTargetName = nil
+
+-- reset da camera
+local function resetCamera()
+	local char = LocalPlayer.Character
+	if not char then
+		char = LocalPlayer.CharacterAdded:Wait()
+	end
+
+	local humanoid = char:WaitForChild("Humanoid")
+	CurrentCamera.CameraSubject = humanoid
+end
+
+-- seta o target
+local function setViewTarget(targetPlayer)
+	if not targetPlayer or not Players:FindFirstChild(targetPlayer.Name) then
+		resetCamera()
+		return
+	end
+
+	currentTarget = targetPlayer
+
+	if characterAddedConn then
+		characterAddedConn:Disconnect()
+	end
+
+	characterAddedConn = targetPlayer.CharacterAdded:Connect(function(char)
+		task.wait(0.3)
+		if viewEnabled and currentTarget == targetPlayer then
+			local humanoid = char:WaitForChild("Humanoid", 5)
+			if humanoid then
+				CurrentCamera.CameraSubject = humanoid
+			end
+		end
+	end)
+
+	if targetPlayer.Character then
+		local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+			or targetPlayer.Character:WaitForChild("Humanoid", 2)
+
+		if humanoid then
+			CurrentCamera.CameraSubject = humanoid
+		end
+	end
+end
+
+-- para de ver
+local function stopViewing()
+	viewEnabled = false
+	currentTarget = nil
+	lastTargetName = nil
+
+	if characterAddedConn then
+		characterAddedConn:Disconnect()
+		characterAddedConn = nil
+	end
+
+	resetCamera()
+end
+
+-- loop principal (onde o target é atualizado)
+RunService.RenderStepped:Connect(function()
+	if not viewEnabled then return end
+
+	local targetName = getgenv().PlayerSelecionado
+	if not targetName then
+		stopViewing()
+		return
+	end
+
+	-- troca de target detectada
+	if targetName ~= lastTargetName then
+		lastTargetName = targetName
+
+		local newTarget = Players:FindFirstChild(targetName)
+		if newTarget then
+			setViewTarget(newTarget)
+		else
+			stopViewing()
+		end
+		return
+	end
+
+	-- mantém a camera no humanoid
+	if currentTarget and currentTarget.Character then
+		local humanoid = currentTarget.Character:FindFirstChildOfClass("Humanoid")
+		if humanoid and CurrentCamera.CameraSubject ~= humanoid then
+			CurrentCamera.CameraSubject = humanoid
+		end
+	end
+end)
+
+-- toggle
+AddToggle(Main, {
+	Name = "View",
+	Default = false,
+	Callback = function(Value)
+		viewEnabled = Value
+
+		if not Value then
+			stopViewing()
+			return
+		end
+
+		local targetName = getgenv().PlayerSelecionado
+		if not targetName then
+			resetCamera()
+			return
+		end
+
+		local targetPlayer = Players:FindFirstChild(targetName)
+		if targetPlayer then
+			lastTargetName = targetName
+			setViewTarget(targetPlayer)
+		else
+			stopViewing()
+		end
+	end
+})
+
+-- ===== TOGGLE =====
+AddToggle(Main, {
+    Name = "Focos Player",
+    Default = false,
+    Callback = function(state)
+        FollowEnabled = state
+        if state then
+            Start()
+        else
+            StopAll()
+        end
+    end
+})
+
+local CamlockEnabled = false
+local AIM_PART = "HumanoidRootPart"
+local SMOOTHNESS = 1
+local FOV_RADIUS = 250  -- muda o tamanho do FOV aqui
+
+-- ===== FOV CIRCLE =====
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 2
+fovCircle.NumSides = 100
+fovCircle.Radius = FOV_RADIUS
+fovCircle.Filled = false
+fovCircle.Color = Color3.fromRGB(255, 50, 50)
+fovCircle.Transparency = 1
+fovCircle.Visible = false
+
+-- ===== GET CLOSEST PLAYER IN FOV =====
+local function getClosestPlayerInFOV()
+    local closest = nil
+    local closestDist = FOV_RADIUS
+    local center = Vector2.new(CurrentCamera.ViewportSize.X / 2, CurrentCamera.ViewportSize.Y / 2)
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if not plr.Character then continue end
+
+        local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+        local root = plr.Character:FindFirstChild(AIM_PART)
+        if not hum or not root or hum.Health <= 0 then continue end
+
+        local screenPos, onScreen = CurrentCamera:WorldToViewportPoint(root.Position)
+        if not onScreen then continue end
+
+        local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+        local dist = (screenVec - center).Magnitude
+
+        if dist < closestDist then
+            closestDist = dist
+            closest = root
+        end
+    end
+
+    return closest
+end
+
+-- ===== CAMLOCK LOOP =====
+RunService.RenderStepped:Connect(function()
+    local center = Vector2.new(CurrentCamera.ViewportSize.X / 2, CurrentCamera.ViewportSize.Y / 2)
+
+    -- Atualiza o círculo sempre (visível só quando camlock ligado)
+    fovCircle.Position = center
+    fovCircle.Radius = FOV_RADIUS
+    fovCircle.Visible = CamlockEnabled
+
+    if not CamlockEnabled then return end
+
+    local target = getClosestPlayerInFOV()
+    if not target then return end
+
+    local camPos = CurrentCamera.CFrame.Position
+    local cf = CFrame.lookAt(camPos, target.Position)
+
+    if SMOOTHNESS >= 1 then
+        CurrentCamera.CFrame = cf
+    else
+        CurrentCamera.CFrame = CurrentCamera.CFrame:Lerp(cf, SMOOTHNESS)
+    end
+end)
+
+AddToggle(Main, {
+    Name = "Camlock",
+    Default = false,
+    Callback = function(state)
+        CamlockEnabled = state
+        fovCircle.Visible = state
+    end
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- =========================
+-- STATE
+-- =========================
+local ESP_ENABLED = false
+local ESP_CACHE = {}
+local INVENTORY_TIMER = 0
+
+-- =========================
+-- UTILS
+-- =========================
+local function getHRP(char)
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getDistance(char)
+	local hrp = getHRP(char)
+	local myHRP = getHRP(LocalPlayer.Character)
+	if hrp and myHRP then
+		return math.floor((hrp.Position - myHRP.Position).Magnitude)
+	end
+	return 0
+end
+
+-- =========================
+-- INVENTORY SCAN (CACHEADO)
+-- =========================
+local function scanInventory(player)
+	local found = {}
+
+	-- Backpack
+	local bp = player:FindFirstChild("Backpack")
+	if bp then
+		for _, tool in ipairs(bp:GetChildren()) do
+			if tool:IsA("Tool") then
+				found[tool.Name] = true
+			end
+		end
+	end
+
+	-- Tool equipada
+	local char = player.Character
+	if char then
+		for _, tool in ipairs(char:GetChildren()) do
+			if tool:IsA("Tool") then
+				found[tool.Name] = true
+			end
+		end
+	end
+
+	local list = {}
+	for name in pairs(found) do
+		table.insert(list, name)
+	end
+
+	if #list == 0 then
+		return "No Tools"
+	end
+
+	return table.concat(list, ", ")
+end
+
+-- =========================
+-- CREATE ESP
+-- =========================
+local function createESP(player)
+	if player == LocalPlayer then return end
+	if ESP_CACHE[player] then return end
+
+	local box = Drawing.new("Square")
+	box.Visible = false
+	box.Thickness = 1
+	box.Filled = false
+	box.Color = Color3.fromRGB(255, 120, 200)
+
+	local text = Drawing.new("Text")
+	text.Visible = false
+	text.Size = 13
+	text.Center = true
+	text.Outline = true
+	text.Color = Color3.fromRGB(255, 200, 255)
+
+	ESP_CACHE[player] = {
+		Box = box,
+		Text = text,
+		Items = "Loading..."
+	}
+end
+
+-- =========================
+-- REMOVE ESP
+-- =========================
+local function removeESP(player)
+	local esp = ESP_CACHE[player]
+	if esp then
+		esp.Box:Remove()
+		esp.Text:Remove()
+		ESP_CACHE[player] = nil
+	end
+end
+
+-- =========================
+-- UPDATE LOOP
+-- =========================
+RunService.RenderStepped:Connect(function(dt)
+	if not ESP_ENABLED then
+		for _, esp in pairs(ESP_CACHE) do
+			esp.Box.Visible = false
+			esp.Text.Visible = false
+		end
+		return
+	end
+
+	INVENTORY_TIMER += dt
+
+	for player, esp in pairs(ESP_CACHE) do
+		local char = player.Character
+		local hrp = getHRP(char)
+
+		if char and hrp then
+			local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+
+			if onScreen then
+				local dist = getDistance(char)
+				local size = math.clamp(3000 / math.max(dist, 1), 20, 80)
+
+				esp.Box.Size = Vector2.new(size, size * 1.5)
+				esp.Box.Position = Vector2.new(
+					screenPos.X - size / 2,
+					screenPos.Y - size / 2
+				)
+				esp.Box.Visible = true
+
+				esp.Text.Text =
+					player.Name ..
+					" [" .. dist .. "m]\n" ..
+					esp.Items
+
+				esp.Text.Position = Vector2.new(
+					screenPos.X,
+					screenPos.Y - size
+				)
+				esp.Text.Visible = true
+			else
+				esp.Box.Visible = false
+				esp.Text.Visible = false
+			end
+		else
+			esp.Box.Visible = false
+			esp.Text.Visible = false
+		end
+	end
+
+	-- Atualiza inventário a cada 1s (super leve)
+	if INVENTORY_TIMER >= 1 then
+		INVENTORY_TIMER = 0
+		for player, esp in pairs(ESP_CACHE) do
+			esp.Items = scanInventory(player)
+		end
+	end
+end)
+
+-- =========================
+-- PLAYER HANDLING
+-- =========================
+for _, plr in ipairs(Players:GetPlayers()) do
+	createESP(plr)
+end
+
+Players.PlayerAdded:Connect(createESP)
+Players.PlayerRemoving:Connect(removeESP)
+
+-- =========================
+-- TOGGLE UI
+-- =========================
+AddToggle(Main, {
+	Name = "Esp Player",
+	Default = false,
+	Callback = function(state)
+		ESP_ENABLED = state
+	end
+})
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local cam = workspace.CurrentCamera
+
+getgenv().AllowFling = true
+getgenv().flingActive = false
+
+AddButton(Main, {
+    Name = "Fling",
+    Callback = function()
+    if not getgenv().AllowFling then
+        warn("Fling desativado. Ative com: getgenv().AllowFling = true")
+        return
+    end
+
+    local selectedPlayerName = getgenv().PlayerSelecionado
+    if not selectedPlayerName then
+        warn("Nenhum jogador selecionado.")
+        return
+    end
+
+    local target = Players:FindFirstChild(selectedPlayerName)
+    if not target or not target.Character then return end
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local tRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if not root or not tRoot then return end
+    local char = LocalPlayer.Character
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local original = root.CFrame
+
+    workspace.FallenPartsDestroyHeight = 0/0
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "FlingForce"
+    bv.Velocity = Vector3.new(9e8, 9e8, 9e8)
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = root
+    hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+    hum.PlatformStand = false
+    cam.CameraSubject = target.Character:FindFirstChild("Head") or tRoot or hum
+
+    getgenv().flingActive = true
+    task.spawn(function()
+        local angle = 0
+        local parts = {root}
+        while getgenv().flingActive and target and target.Character and target.Character:FindFirstChildOfClass("Humanoid") do
+            angle += 500
+
+            for _, part in ipairs(parts) do
+                local pos = tRoot.Position + (tRoot.Velocity / 1.5)
+                root.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(angle), 0, 0)
+            end
+
+            root.Velocity = Vector3.new(9e8, 9e8, 9e8)
+            root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+            task.wait()
+        end
+    end)
+ end
+})
+
+AddButton(Main, {
+    Name = "Desabli-fling",
+    Callback = function() 
+    -- Apenas para o loop do fling, sem bloquear permanentemente o AllowFling
+    getgenv().flingActive = false
+    getgenv().AllowReturn = false
+
+    local Player = game.Players.LocalPlayer
+    local Character = Player.Character or Player.CharacterAdded:Wait()
+    local RootPart = Character:FindFirstChild("HumanoidRootPart")
+    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+
+    if not RootPart or not Humanoid then
+        warn("RootPart ou Humanoid não encontrado.")
+        return
+    end
+
+    local fixedReturnPos = Vector3.new(0, 75, 0) -- posição segura
+
+    for _, obj in ipairs(Character:GetDescendants()) do
+        if obj:IsA("BodyMover") or obj:IsA("Constraint") or obj:IsA("VectorForce") 
+           or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") 
+           or obj:IsA("LinearVelocity") or obj:IsA("Torque") then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+
+    Humanoid.PlatformStand = true
+    RootPart.Anchored = true
+    RootPart.AssemblyLinearVelocity = Vector3.zero
+    RootPart.AssemblyAngularVelocity = Vector3.zero
+
+    RootPart.CFrame = CFrame.new(fixedReturnPos)
+    print("Jogador teleportado para a posição segura.")
+
+    task.wait(3)
+
+    RootPart.Anchored = false
+    Humanoid.PlatformStand = false
+    print("Jogador liberado com segurança.")
+    end
+})
